@@ -39,24 +39,72 @@ void vStartLcd( unsigned portBASE_TYPE uxPriority )
 	xTaskCreate( vLcdTask, ( signed char * ) "Lcd", lcdSTACK_SIZE, NULL, uxPriority, ( xTaskHandle * ) NULL );
 }
 
+struct ButtonRectangle
+{
+	int x0;
+	int x1;
+	int y0;
+	int y1;
+};
+
+int inWhichButton(int x, int y, struct ButtonRectangle rects[], const int button_num)
+{
+	int i;
+	for(i=0;i<button_num;++i)
+	{
+		if( rects[i].x0 < x 
+			&& rects[i].x1 > x
+			&& rects[i].y0 < y
+			&& rects[i].y1 > y)
+		{
+			return i;
+		}
+	}
+	return -1;
+}
+
+void displayResult(short digit[], int len)
+{
+	int i;
+	for(i = 0; i < len; ++i)
+	{
+		printf("%hd", digit[i]);
+	}
+	printf("\r\n");
+}
 
 static portTASK_FUNCTION( vLcdTask, pvParameters )
 {
 	/* my variables */
-	int block_x = 3;
-	int block_y = 4;
-	int block_width = DISPLAY_WIDTH/block_x;
-	int width = DISPLAY_WIDTH;
-	int block_height = DISPLAY_HEIGHT/block_y;
-	int height = DISPLAY_HEIGHT;
-	int row,col, x0,x1,y0,y1;
-	unsigned int xPos, yPos, pressure;
-
-	unsigned char displayStrings[12][8] = {
+	const int digit_len = 50;
+	short digit[digit_len];
+	int flag;
+	int value;
+	int digit_current_index = 0;
+	const int block_num_x = 3;
+	const int block_num_y = 4;
+	const int line_border = 12;
+	const int button_num = 12;
+	int block_width = (DISPLAY_WIDTH-(block_num_x+1) * line_border)/block_num_x;
+	//int width = DISPLAY_WIDTH;
+	int block_height = (DISPLAY_HEIGHT-(block_num_y+1)*line_border)/block_num_y;
+	//int height = DISPLAY_HEIGHT;
+	int row,col, x0,x1,y0,y1, index;
+	unsigned int x_pos, y_pos, pressure;
+	struct ButtonRectangle buttonRects[button_num];
+	unsigned char displayStrings[button_num][8] = {
 		"1", "2", "3"
 		,"4", "5", "6"
 		,"7", "8", "9"
 		,"OK", "0", "CANCEL"};
+	short displayNumbers[button_num] = {
+		1, 2, 3
+		, 4, 5, 6
+		, 7, 8, 9
+		, -1, 0, -1
+	};
+
+	const int ok_index = 9, cancel_index = 11;
 
 
 	/* Just to stop compiler warnings. */
@@ -69,30 +117,56 @@ static portTASK_FUNCTION( vLcdTask, pvParameters )
 	 * a task */
 	lcd_init();
 
-	lcd_fillScreen(MAROON);
+	lcd_fillScreen(BLACK);
 
 	/* my assignment starts here */
    	// draw button
-	for(row=0; row < block_y;++row)
+	y_pos = line_border;
+	index = 0;
+	for(row=0; row < block_num_y;++row)
 	{
-		for(col=0;col<block_x;++col)
+		x_pos = 0;
+		for(col=0;col<block_num_x;++col)
 		{
-			y0 = row * block_height;
-			y1 = y0 + block_height;
-			x0 = col * block_width;
+			x_pos += line_border;
+			x0 = x_pos;
 			x1 = x0 + block_width;
-			lcd_fillRect(x0,y0,x1,y1, GREEN);
-			lcd_putString( (x0+x1)/2, (y0+y1)/2, displayStrings[row*block_x+col]);
+			y0 = y_pos;
+			y1 = y0 + block_height;
 
+			buttonRects[index].x0 = x0;
+			buttonRects[index].x1 = x1;
+			buttonRects[index].y0 = y0;
+			buttonRects[index].y1 = y1;
+			
+
+			x_pos = x1;
+
+			lcd_fillRect(x0,y0,x1,y1, GREEN);
+			lcd_putString( (x0+x1)/2, (y0+y1)/2, displayStrings[index]);
+
+			++index;
 		}
+
+		y_pos += block_height + line_border;
+	}
+
+	for(index = 0; index < button_num;++index)
+	{
+		printf("%d, %d, %d, %d, %d\r\n"
+		, buttonRects[index].x0, buttonRects[index].x1
+		, buttonRects[index].y0, buttonRects[index].y1
+		, displayNumbers[index]);
 	}
 
 	// draw line
+	/*
 	for(row = 0; row < block_y+1; ++row)
 		lcd_line(0, row * block_height, width, row * block_height, BLACK);
 
 	for(col = 0; col < block_x+1; ++col)
 		lcd_line(col * block_width, 0, col * block_width, height, BLACK);
+	*/
 
 	/* Infinite loop blocks waiting for a touch screen interrupt event from
 	 * the queue. */
@@ -107,7 +181,7 @@ static portTASK_FUNCTION( vLcdTask, pvParameters )
 		// VICVectAddr17 = (unsigned long)vLCD_ISRHandler;	/* Set handler vector */
 		VICIntEnable |= 1 << 17;	/* Enable interrupts on vector 17 */
 
-		printf("waiting for event\r\n");	   	
+		// printf("waiting for event\r\n");	   	
 
 		/* Block on a quete waiting for an event from the TS interrupt handler */		
 		xQueueReceive(xTouchScreenPressedQ, NULL, portMAX_DELAY);
@@ -122,14 +196,51 @@ static portTASK_FUNCTION( vLcdTask, pvParameters )
 		/* Keep polling until pressure == 0 */
 		
 		pressure = 1;
-		getTouch(&xPos, &yPos, &pressure);
+		getTouch(&x_pos, &y_pos, &pressure);
+		flag = 0;
 		while(pressure)
-		{ 	printf("%d,%d, %d\r\n",xPos,yPos, pressure);
-			getTouch(&xPos, &yPos, &pressure);
+		{ 	
+			value = inWhichButton(x_pos, y_pos, buttonRects, button_num);
+
+			// printf("%d,%d, %d\r\n",x_pos,y_pos, value);
+
+			if(!flag)
+			{
+				if(0 <= value)
+				{
+					if(ok_index == value)
+					{
+						printf("OK pressed, you typed:\r\n");
+						displayResult(digit, digit_current_index);
+						digit_current_index = 0;
+					}
+					else if(cancel_index == value)
+					{
+						printf("CANCEL pressed, all type in disgarded\r\n");
+						digit_current_index = 0;					
+					}
+					else
+					{
+						digit[digit_current_index] = displayNumbers[value];
+						printf("value: %d, index: %d\r\n",displayNumbers[value], digit_current_index);
+						++digit_current_index;
+						
+						if(digit_current_index >= digit_len)
+						{
+							printf("Buffer is full, you typed:\r\n");
+							displayResult(digit, digit_len);
+							digit_current_index = 0;		
+							printf("Buffer clear\r\n");				
+						}						
+					}
+				}
+				flag = 1;
+			}
+			getTouch(&x_pos, &y_pos, &pressure);
 			mdelay(100);
 		} 
 
-		
+		mdelay(100);
 		/* +++ This point in the code can be interpreted as a screen button release event +++ */
 	}
 }
